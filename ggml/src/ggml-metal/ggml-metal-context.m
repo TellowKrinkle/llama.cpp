@@ -306,11 +306,16 @@ static struct ggml_metal_buffer_id ggml_metal_get_buffer_id(const struct ggml_te
 
 void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     @autoreleasepool {
+        size_t page_mask = sysconf(_SC_PAGESIZE) - 1;
         // wrap the source data into a Metal buffer
+        uintptr_t data_ui = (uintptr_t)data;
+        uintptr_t base    = data_ui & ~page_mask;
+        size_t src_offset = data_ui & page_mask;
         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
-        id<MTLBuffer> buf_src = [device newBufferWithBytes:data
-                                                    length:size
-                                                   options:MTLResourceStorageModeShared];
+        id<MTLBuffer> buf_src = [device newBufferWithBytesNoCopy:(void *)base
+                                                          length:(size + src_offset + page_mask) & ~page_mask
+                                                         options:MTLResourceStorageModeShared
+                                                     deallocator:nil];
 
         GGML_ASSERT(buf_src);
 
@@ -328,7 +333,7 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:buf_src
-                   sourceOffset:0
+                   sourceOffset:src_offset
                        toBuffer:bid_dst.metal
               destinationOffset:bid_dst.offs
                            size:size];
